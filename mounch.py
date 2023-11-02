@@ -49,7 +49,7 @@
 
 import collections
 import os
-import pathlib
+from  pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -57,10 +57,75 @@ import sys
 import yaml
 
 
-def main():
-    cache_file = pathlib.Path("~/.cache/mounch/cache").expanduser()
-    configfile = pathlib.Path("~/.config/mounch/mounch.yaml").expanduser()
+def menu_command() -> subprocess.Popen:
+    """Call and return the subprocess.Open instance to open a menu."""
+    if ('XDG_SESSION_TYPE' in os.environ
+            and os.environ['XDG_SESSION_TYPE'] == 'wayland'):
+        return subprocess.Popen(
+                [
+                    'wofi',
+                    '--dmenu',
+                    '--insensitive',
+                    '--allow-images',
+                    '--prompt="Choose your mounchie:"',
+                    # '--style=~/.config/rofi/mounch.rasi',
+                ],
+                stdout=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+    else:
+        return subprocess.Popen(
+                [
+                    "rofi", "-dmenu", "-i",
+                    "-p", "Choose your mounchie:",
+                    "-show-icons",
+                    "-no-custom",
+                    "-theme", "mounch"
+                ],
+                stdout=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+
+
+def sort_from_cache(
+        application_config: dict,
+        cache_file: Path) -> (collections.OrderedDict, dict):
+    """Sort the application_config by frequency from the cache.
+
+    Machine learning, big data at work!!!!!
+    Sort the application_config by frequency in the
+    cache first. It will first do a collection ordering if the element is
+    not an empty string when stripped. Sort the cached_entries as list
+    sorted by its frequency number and then merge in order as it appears
+    in the config (py3.7+) to the one who didn't appear with the other
+    application_config dict.
+
+    """
     cached_entries = {}
+    for entry in cache_file.read_text().split('\n'):
+        try:
+            id_, freq_str = entry.strip().split()
+            if id_ not in application_config:
+                continue
+            cached_entries[id_] = int(freq_str)
+        except (IndexError, ValueError):
+            continue
+
+    application_config = {
+        **dict(
+            collections.OrderedDict([(el, application_config[el]) for el in dict(
+                reversed(
+                    sorted(cached_entries.items(),
+                           key=lambda item: item[1]))).keys(
+            ) if el.strip()])),
+        **application_config
+    }
+    return application_config, cached_entries
+
+
+def main():
+    cache_file = Path("~/.cache/mounch/cache").expanduser()
+    configfile = Path("~/.config/mounch/mounch.yaml").expanduser()
 
     if not configfile.exists():
         print("I could not find config file: ", configfile)
@@ -68,50 +133,22 @@ def main():
     application_config = yaml.safe_load(configfile.open('r'))
 
     if cache_file.exists():
-        # Machine learning, big data at work!!!!!
-        # Sort the application_config by frequency in the
-        # cache first. It will first do a collection ordering if the element is
-        # not an empty string when stripped. Sort the cached_entries as list
-        # sorted by its frequency number and then merge in order as it appears
-        # in the config (py3.7+) to the one who didn't appear with the other
-        # application_config dict.
-        for entry in cache_file.read_text().split('\n'):
-            try:
-                id_, freq_str = entry.strip().split()
-                if id_ not in application_config:
-                    continue
-                cached_entries[id_] = int(freq_str)
-            except (IndexError, ValueError):
-                continue
-
-        application_config = {
-            **dict(
-                collections.OrderedDict([(el, application_config[el]) for el in dict(
-                    reversed(
-                        sorted(cached_entries.items(),
-                               key=lambda item: item[1]))).keys(
-                ) if el.strip()])),
-            **application_config
-        }
+        application_config, cached_entries = sort_from_cache(application_config,
+                                                             cache_file)
+    else:
+        cached_entries = {}
 
     ret = []
-    for app in application_config:
-        icon = application_config[app].get('icon', 'default')
-        iconpath = pathlib.Path(
-            f"~/.local/share/icons/{icon}.png").expanduser()
+    for config in application_config.values():
+        icon = config.get('icon', 'default')
+        iconpath = Path(icon).expanduser()
         if iconpath.exists():
             icon = iconpath
-        ret.append(f"{application_config[app]['description']}\0icon\x1f{icon}")
+        ret.append(f"{config['description']}\0icon\x1f{icon}")
 
-    stringto = "\n".join(ret).encode()
+    stringto = '\n'.join(ret).encode()
 
-    popo = subprocess.Popen([
-        "rofi", "-dmenu", "-i", "-p", "🤓 Choose your mounchie:", "-show-icons",
-        "-no-custom", "-theme", "mounch"
-    ],
-        stdout=subprocess.PIPE,
-        stdin=subprocess.PIPE,
-        stderr=subprocess.PIPE)
+    popo = menu_command()
     stdout = popo.communicate(input=stringto)[0]
     output = stdout.decode().strip()
     if not output:
@@ -133,7 +170,7 @@ def main():
     cache_file.write_text('\n'.join(
         [f'{entry} {freq}' for entry, freq in cached_entries.items()]))
 
-    binarypath = pathlib.Path(chosen['binary']).expanduser()
+    binarypath = Path(chosen['binary']).expanduser()
     binary = shutil.which(binarypath)
     if not binary:
         print(f"Cannot find executable \"{chosen['binary']}\"")
